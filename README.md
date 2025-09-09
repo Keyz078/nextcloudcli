@@ -2,7 +2,7 @@
 Nextcloud bash script for upload and download
 
 #### Features:
-- Upload and download to or from your nextcloud host
+- Interactive upload and download to or from your nextcloud host
 - Simple saved login session (Stored in $HOME/.nextcloud_session)
 
 #### How to:
@@ -14,4 +14,4 @@ chmod +x nextcloudcli
 ```
 
 #### P.S:
-Dev env only recommended, or just for your self hosted nextcloud
+For dev environments or self-hosted Nextcloud use only
