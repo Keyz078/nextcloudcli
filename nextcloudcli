@@ -8,7 +8,35 @@ YELLOW="\033[1;33m"
 BLUE="\033[0;34m"
 NC="\033[0m"
 
-# Check if session file exists
+# ==== HELP MENU ====
+show_help() {
+    echo -e "${YELLOW}===== Nextcloud CLI Help =====${NC}"
+    echo -e "${BLUE}Navigation:${NC}"
+    echo -e "  cd <number>       ${NC}- Change directory using the directory number shown in the list"
+    echo -e "                     Example: cd 1"
+    echo -e "  cd ..             ${NC}- Go back to previous directory"
+    echo -e "  cd / or cd ~      ${NC}- Jump directly to root directory"
+    echo
+    echo -e "${BLUE}File Operations:${NC}"
+    echo -e "  <number(s)>       ${NC}- Select one or more files by their numbers for download/upload"
+    echo -e "                     Example (download mode): 3"
+    echo -e "                     Example (multiple): 3 5 7"
+    echo -e "  <filename(s)>     ${NC}- Enter one or more filenames to upload in upload mode"
+    echo -e "                     Example (upload mode): file1.txt file2.jpg"
+    echo
+    echo -e "${BLUE}Menu Options:${NC}"
+    echo -e "  0                 ${NC}- Return to the main menu"
+    echo -e "  help              ${NC}- Show this help guide"
+    echo
+    echo -e "${YELLOW}Tips:${NC}"
+    echo -e " - Directories are marked as [DIR], files as [FILE]."
+    echo -e " - Use spaces to select multiple items (files or directories)."
+    echo -e " - Upload mode accepts local files (absolute or relative path)."
+    echo -e "   Example: file.txt   ./Download/a.txt   /home/user/file.jpg"
+    echo -e " - Download mode only works with files, not directories."
+    echo
+}
+
 # Function to ask yes/no with default Yes
 ask_yes_no() {
     local prompt="$1"
@@ -24,6 +52,7 @@ ask_yes_no() {
     done
 }
 
+# Check if session file exists
 if [[ -f "$SESSION_FILE" ]]; then
     source "$SESSION_FILE"
 
@@ -63,7 +92,7 @@ STATUS=$(curl --connect-timeout 10 -k -H "Authorization: Basic $CREDS" -s -o /de
 
 if [[ "${STATUS}" == "207" || "${STATUS}" == "200" ]]; then
     echo -e "${GREEN}Login successful!${NC}"
-    
+
     if [[ ! -f "$SESSION_FILE" ]]; then
         if ask_yes_no "Save session for next login?"; then
             echo -e "URL=\"$URL\"" > "$SESSION_FILE"
@@ -106,12 +135,12 @@ join_path() {
 list_contents(){
     local path="$1"
     local encoded_path=$(echo "$path" | sed 's/ /%20/g')
-    
+
     local response=$(curl -H "Authorization: Basic $CREDS" -s -k -X PROPFIND -H "Depth: 1" "$BASE_URL$encoded_path/" | grep -oP '(?<=<d:href>).*?(?=</d:href>)')
 
     local dir_list=()
     local file_list=()
-    
+
     while read -r line; do
         local name=$(echo "$line" | sed "s|/remote.php/dav/files/$USERNAME$encoded_path/||g" \
                                      | sed "s|/remote.php/dav/files/$USERNAME/||g" \
@@ -132,14 +161,15 @@ list_contents(){
     printf "%s\n" "${file_list[@]}"
 }
 
-# Main function for interactive mode
+# Main function for interactive mode (multiple files)
 interactive_mode() {
     local mode="$1"
     local current_path="$CURRENT_PATH"
 
     while true; do
-        echo -e "\n${YELLOW}${mode} mode - Current path: ${BLUE}$current_path${NC}"
-        
+        echo -e "\n(Type ${BLUE}?${NC} or ${BLUE}help${NC} for commands)"
+        echo -e "${YELLOW}${mode} mode - Current path: ${BLUE}$current_path${NC}"
+
         # Get content list
         IFS=$'\n' read -d '' -ra content_lines < <(list_contents "$current_path")
         local dir_list=()
@@ -157,34 +187,25 @@ interactive_mode() {
                 file_list+=("$line")
             fi
         done
-        
+
         local combined_list=("${dir_list[@]}" "${file_list[@]}")
-        
+
         if [[ ${#combined_list[@]} -eq 0 && "$current_path" == "/" ]]; then
             echo -e "${RED}Directory is empty.${NC}"
-            if [[ "$mode" == "upload" ]]; then
-                 echo "You can upload files here."
-            else
-                 return 1
-            fi
+            [[ "$mode" == "upload" ]] && echo "You can upload files here." || return 1
         fi
 
         # Show navigation options
-        if [[ "$current_path" != "/" ]]; then
-            echo -e "  cd .. ${YELLOW}Back to previous directory${NC}"
-        fi
+        [[ "$current_path" != "/" ]] && echo -e "  cd .. ${YELLOW}Back to previous directory${NC}"
         echo "  0) Back to main menu"
-        
+
         # Show contents in multiple columns
         output_list=()
         for i in "${!combined_list[@]}"; do
             local name="${combined_list[$i]}"
             local is_dir=false
             for dir in "${dir_list[@]}"; do
-                if [[ "$name" == "$dir" ]]; then
-                    is_dir=true
-                    break
-                fi
+                [[ "$name" == "$dir" ]] && is_dir=true && break
             done
 
             if $is_dir; then
@@ -196,91 +217,91 @@ interactive_mode() {
 
         width=$(tput cols)
         printf "%s\n" "${output_list[@]}" | column -c "${width}"
-        
+
         # User input
-        read -p "Enter choice (e.g.: cd <number>, <number>, or 0): " user_input
+        read -p "cmd: " user_input
         local cmd=$(echo "$user_input" | awk '{print $1}')
-        local num=$(echo "$user_input" | awk '{print $2}')
-        
+        local rest_input=$(echo "$user_input" | cut -d' ' -f2-)
+
         case "$cmd" in
             cd)
-                if [[ "$num" =~ ^[0-9]+$ ]] && (( num > 0 && num <= ${#dir_list[@]} )); then
-                    local dir_name="${dir_list[$((num-1))]}"
-                    current_path=$(join_path "$current_path" "$dir_name")
-                    echo -e "${YELLOW}Entered directory: ${BLUE}$current_path${NC}"
-                elif [[ "$num" == ".." ]]; then
-                    if [[ "$current_path" != "/" ]]; then
-                        current_path=$(dirname "$current_path")
-                        [[ "$current_path" == "." ]] && current_path="/"
-                    else
-                        echo -e "${RED}Already at root directory.${NC}"
-                    fi
+                local target="${rest_input}"
+                if [[ "$target" == "/" || "$target" == "~" ]]; then
+                    current_path="/"
+                elif [[ "$target" =~ ^[0-9]+$ ]] && (( target > 0 && target <= ${#dir_list[@]} )); then
+                    current_path=$(join_path "$current_path" "${dir_list[$((target-1))]}")
+                elif [[ "$target" == ".." ]]; then
+                    [[ "$current_path" != "/" ]] && current_path=$(dirname "$current_path")
+                    [[ "$current_path" == "." ]] && current_path="/"
                 else
-                    echo -e "${RED}Invalid command or number.${NC}"
+                    echo -e "${RED}Invalid directory choice.${NC}"
                 fi
+                ;;
+            help|"?")
+                show_help
                 ;;
             0)
                 return 0
                 ;;
             *)
-                if [[ "$user_input" =~ ^[0-9]+$ ]] && (( user_input > 0 && user_input <= ${#combined_list[@]} )); then
-                    local selected_item="${combined_list[$((user_input-1))]}"
-                    local is_dir=false
-                    for dir in "${dir_list[@]}"; do
-                        if [[ "$selected_item" == "$dir" ]]; then
-                            is_dir=true
-                            break
+                if [[ "$mode" == "download" ]]; then
+                    # download multiple files by numbers
+                    for num_choice in $user_input; do
+                        if [[ "$num_choice" =~ ^[0-9]+$ ]] && (( num_choice > 0 && num_choice <= ${#combined_list[@]} )); then
+                            local selected_item="${combined_list[$((num_choice-1))]}"
+                            local is_dir=false
+                            for dir in "${dir_list[@]}"; do
+                                [[ "$selected_item" == "$dir" ]] && is_dir=true && break
+                            done
+                            if $is_dir; then
+                                echo -e "${RED}Choose file instead of directory: $selected_item${NC}"
+                            else
+                                local download_url=$(join_path "$current_path" "$selected_item")
+                                download_url=$(echo "$download_url" | sed 's/ /%20/g')
+                                echo -e "${YELLOW}Downloading '$selected_item'...${NC}"
+                                curl --progress-bar -f -k -H "Authorization: Basic $CREDS" -o "$selected_item" "$BASE_URL$download_url" && \
+                                    echo -e "${GREEN}Download successful -> $selected_item${NC}" || \
+                                    echo -e "${RED}Download failed -> $selected_item${NC}"
+                            fi
+                        else
+                            echo -e "${RED}Invalid choice: $num_choice${NC}"
                         fi
                     done
-
-                    if $is_dir; then
-                         current_path=$(join_path "$current_path" "$selected_item")
-                         echo -e "${YELLOW}Entered directory: ${BLUE}$current_path${NC}"
-                    elif [[ "$mode" == "download" ]]; then
-                        # Download file
-                        local download_url=$(join_path "$current_path" "$selected_item")
-                        # Escape space
-                        download_url=$(echo "$download_url" | sed 's/ /%20/g')
-                        echo -e "${YELLOW}Downloading '$selected_item' to current terminal location...${NC}"
-                        curl --progress-bar -f -k -H "Authorization: Basic $CREDS" -o "$selected_item" "$BASE_URL$download_url" && \
-                            echo -e "${GREEN}Download successful -> $selected_item${NC}" || \
-                            echo -e "${RED}Download failed -> $selected_item${NC}"
-                        return 0
-                    fi
                 elif [[ "$mode" == "upload" ]]; then
-                    local local_file="$user_input"
-                    if [[ -f "$local_file" ]]; then
-                        local filename=$(basename -- "$local_file")
-                        local upload_url=$(join_path "$current_path" "$filename")
-                        # Escape space
-                        upload_url=$(echo "$upload_url" | sed 's/ /%20/g')
-                        echo -e "${YELLOW}Uploading '$filename' to '$current_path'...${NC}"
-                        curl --progress-bar -f -k -H "Authorization: Basic $CREDS" -T "$local_file" "$BASE_URL$upload_url" && \
-                            echo -e "${GREEN}Upload successful: $local_file${NC}" || \
-                            echo -e "${RED}Upload failed: $local_file${NC}"
-                        return 0
-                    else
-                        echo -e "${RED}Local file not found.${NC}"
-                        # Removed return 0 so it won't go back to main menu
-                    fi
+                    # upload multiple files
+                    for local_file in $user_input; do
+                        if [[ -f "$local_file" ]]; then
+                            local filename=$(basename -- "$local_file")
+                            local upload_url=$(join_path "$current_path" "$filename")
+                            upload_url=$(echo "$upload_url" | sed 's/ /%20/g')
+                            echo -e "${YELLOW}Uploading '$filename' to '$current_path'...${NC}"
+                            curl --progress-bar -f -k -H "Authorization: Basic $CREDS" -T "$local_file" "$BASE_URL$upload_url" && \
+                                echo -e "${GREEN}Upload successful: $local_file${NC}" || \
+                                echo -e "${RED}Upload failed: $local_file${NC}"
+                        else
+                            echo -e "${RED}Local file not found: $(pwd)/$local_file${NC}"
+                        fi
+                    done
                 else
-                    echo -e "${RED}Invalid choice.${NC}"
+                    echo -e "${RED}Invalid input.${NC}"
                 fi
                 ;;
         esac
     done
 }
 
+
 # Main menu loop
 while true; do
     echo -e "\n${YELLOW}==== Nextcloud Menu ====${NC}"
-    PS3="?> : "
-    options=("Upload file" "Download file" "Exit")
+    PS3="nextcloudcli> : "
+    options=("Upload file" "Download file" "help" "Exit")
     select opt in "${options[@]}"; do
         case $REPLY in
             1) interactive_mode "upload"; break ;;
             2) interactive_mode "download"; break ;;
-            3) echo "Bye!"; exit 0 ;;
+            3|help|"?") show_help; break ;;
+            4) echo "Bye!"; exit 0 ;;
             *) echo -e "${RED}Invalid choice.${NC}"; break ;;
         esac
     done
